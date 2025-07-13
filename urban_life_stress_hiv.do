@@ -3,7 +3,7 @@
 		*																		               *
 		*	Law enforcement–related stress and gentrification as determinants of CD4 decline   *
 		*		urban_life_stress_hiv.do										               *
-		*		Simone J. Skeen (06-27-2025)									               *
+		*		Simone J. Skeen (07-12-2025)									               *
 		*																		               *
 		*--------------------------------------------------------------------------------------*
 
@@ -15,6 +15,10 @@ set more off
 cd "C:\Users\sskee\OneDrive\Documents\02_tulane\01_research\noah\urban_life_stress_hiv\inputs\data"
 clear
 
+* set scheme, font
+
+set scheme white_tableau
+graph set window fontface "Arial"
 
 		///////////////// *----------------------------------------* /////////////////
 		///////////////// * Import complete lvl-1 dataset: N = 395 * /////////////////
@@ -355,8 +359,6 @@ use urban_life_stress_hiv_n395, clear
 
 * intraclass correlation / variance partition /// estat icc ok for logit / glm+ etc: https://www.stata.com/features/overview/intraclass-correlations-for-multilevel-models/
 
-
-
 		*** SJS 5/29: ICC is infinitesmal; proceeding w/ logit
 
 		////////////////////// Model A1: bivar / crude //////////////////////
@@ -411,18 +413,6 @@ use urban_life_stress_hiv_n395, clear
 
 			*** SJS 5/29: robust against that respecification, fuck yeah
 
-			
-		* average marginal effect: x_1
-				
-		margins, dydx(race_bin)			
-		margins, dydx(race_bin)
-				
-		* marginal effects at representative values: x_k
-
-		*margins, dydx(race_bin) at(zF2_w_n395 =(0 1 2)) vsquish	
-		margins, dydx(race_bin) at(audit_bin =(0 1)) vsquish			
-			
-			
 		////////////////////// Model A3: bivar / crude //////////////////////
 		*																	*
 		*	  geolinking-restricted lvl-1 / lvl-2 dataset: n = 274			*
@@ -486,6 +476,39 @@ use urban_life_stress_hiv_n274, clear
 		collin F1_w_n274 F2_w_n274 homeless_bin medhx___36 lehtotal_sum_n incarcerated stigma_sum ///
 			assigned_sex age60 race_bin pd_call_010m ice_race_n sdi_n if !missing(hads_depressbin), corr
 
+		* margins
+			
+		*** SJS 7/12: using Model A5 specification / post-estimation w/ n395 loadings
+					
+		* LEH - median-split	
+
+		summ zlehtotal_sum_n, detail	
+		xtile zlehtotal_sum_n_mdn = zlehtotal_sum_n, nq(2)
+		list zlehtotal_sum_n zlehtotal_sum_n_mdn, sep(0)
+		recode zlehtotal_sum_n_mdn (1=0) (2=1)	
+		tab zlehtotal_sum_n_mdn
+
+		* re-run: LEH Mdn as factor var
+
+		logit hads_depressbin ///
+			pd_call_010m ice_race_n sdi_n ///
+			zF1_w_n395 zF2_w_n395 zstigma_sum i.medhx___36 i.zlehtotal_sum_n_mdn i.incarcerated i.homeless_bin ///
+			i.race_bin i.assigned_sex i.age60, or vce(cluster geoid) nolog
+
+		* F1 - display quartiles
+
+		summ zF1_w_n395, detail
+
+		* marginal effects at representative values
+
+		margins, dydx(zlehtotal_sum_n_mdn) at(zF1_w_n395 = (-1.3206 -.8746 -.0885 .6091 1.9727)) vsquish	
+			
+		*marginsplot, recast(line) recastci(rarea) title(" ") ///
+		*plot1opts(lcolor("204 0 204")) ci1opts(color("204 0 204%15")) ///
+		*xtitle("quartiles of _hyperlocal, everyday stress_ endorsement", size(*.95)) ///
+		*ytitle("Pr(borderline depression = 1)")
+
+		
 		///////////////// *--------------------------------------------* /////////////////
 		///////////////// * Model B: y_i = suboptimal CD4 count (<500) * /////////////////
 		///////////////// *--------------------------------------------* /////////////////		
@@ -618,11 +641,11 @@ use urban_life_stress_hiv_n395, clear
 
 use urban_life_stress_hiv_n274, clear	
 
-* loop over buffer sizes	
+		* loop over buffer sizes	
 
-foreach i of varlist pd_call_010m pd_call_025m pd_call_050m ice_race_n sdi_n {		
-	logit cd4_bin `i', or vce(cluster geoid) nolog
-	}	
+		foreach i of varlist pd_call_010m pd_call_025m pd_call_050m ice_race_n sdi_n {		
+			logit cd4_bin `i', or vce(cluster geoid) nolog
+			}	
 
 		/////////////////// Model B4: multivar / adjusted ///////////////////
 		*																	*
@@ -665,9 +688,9 @@ foreach i of varlist pd_call_010m pd_call_025m pd_call_050m ice_race_n sdi_n {
 		collin F1_w_n274 F2_w_n274 art audit_bin dailypolyuse ///
 			assigned_sex age60 race_bin pd_call_010m ice_race_n sdi_n if !missing(cd4_bin), corr
 
-		//////////////////////////// Model B: suppl /////////////////////////
+		//////////////// Model B: exploratory re-specification //////////////
 		*																	*
-		*	  lvl-1 dataset restricted on race = Black: N = 395				*
+		*	  lvl-1 dataset restricted on race = Black: N = 329				*
 		*     x_i = F1, F2, all ulss item-wise;    							*
 		*     x_j = none												    *
 		*																	*
@@ -677,45 +700,50 @@ foreach i of varlist pd_call_010m pd_call_025m pd_call_050m ice_race_n sdi_n {
 
 use urban_life_stress_hiv_n395, clear			
 		
-keep if race_bin == 0		
-*keep if assigned_sex == 1 & race_bin == 1
-*keep if assigned_sex == 0 & race_bin == 1
+		keep if race_bin == 1		
+		*keep if assigned_sex == 1 & race_bin == 1
+		*keep if assigned_sex == 0 & race_bin == 1
 
-* factor varlist
+		* cont z-standardized ULSS
 
-foreach i of varlist art audit_bin dailypolyuse ///
-	assigned_sex age60 {
-	logit cd4_bin i.`i', or nolog
-	}
+		foreach i of varlist ulss1_n-ulss21_n {
+			egen z`i' = std(`i')
+			}
 
-* cont z-standardized varlist
+		* factor varlist
 
-egen zulss21_n = std(ulss21_n)
-	
-logit cd4_bin zulss21_n, or nolog
-		
+		foreach i of varlist art audit_bin dailypolyuse ///
+			assigned_sex age60 {
+			logit cd4_bin i.`i', or nolog
+			}
 
-* n395
-		
-logit cd4_bin zulss21_n i.art i.audit_bin i.dailypolyuse ///
-	i.assigned_sex i.age60, or nolog		
+		* z-standardized ULSS cont varlist	
+			
+		foreach i of varlist zF1_w_n395 zF2_w_n395 zulss1_n-zulss21_n {
+			logit cd4_bin `i', or nolog
+			}
 
-		*** SJS 6/26: ulss21 sig _if_ F1 is excluded...interesting
-		
-collin zulss21_n art audit_bin dailypolyuse ///
-	assigned_sex age60 if !missing(cd4_bin), corr		
+		* crude bivar - confirmatory	
+			
+		*logit cd4_bin zulss21_n, or nolog
+				
+		* n395
+				
+		logit cd4_bin zulss21_n i.art i.audit_bin i.dailypolyuse ///
+			i.assigned_sex i.age60, or nolog		
 
-* n274		
+				*** SJS 6/26: ulss21 sig _if_ F1 is excluded...interesting
+				
+		collin zulss21_n art audit_bin dailypolyuse ///
+			assigned_sex age60 if !missing(cd4_bin), corr		
 
-* use geolinking-restricted lvl-1 / lvl-2 dataset: n = 274
+		* marginal effects at representative values
 
-use urban_life_stress_hiv_n274, clear	
-		
-logit cd4_bin ulss21_n i.art i.audit_bin i.dailypolyuse ///
-	i.assigned_sex i.age60 pd_call_010m ice_race_n sdi_n, or vce(cluster geoid)
-	
-		*** SJS 6/26: NS in the geolinking-restricted dataset
-	
+		summ zulss21_n, detail
+
+		margins, dydx(assigned_sex) at(zulss21_n = (-.6200 .6671 1.9542)) vsquish
+
+
  *---------------------------------*
  * End of urban_life_stress_hiv.do *			
  *---------------------------------*		
