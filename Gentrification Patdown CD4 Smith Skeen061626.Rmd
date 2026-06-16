@@ -1,0 +1,584 @@
+---
+title: "Gentrification Patdown CD4 Smith Skeen MGMT"
+author: "Ethan A. Smith"
+date: "2026-06-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(haven)
+require(tidygeocoder)
+require(tidyverse)
+require(sf)
+require(sp)
+require(readr)
+require(stringr)
+require(tidycensus)
+library(psych)
+library(gtsummary)
+library(lme4)  
+library(car)   
+
+```
+
+## Methods 
+
+#Design
+We tested these hypotheses via a secondary cross-sectional analysis of baseline (BL) New Orleans Alcohol Use in HIV (NOAH) cohort data [51], geocoded and linked to aggregate areal SES indices derived from American Community Survey (ACS) estimates [52]. Exploratory factor analysis detected latent subconstructs of urban life stress, which were modeled as predictors of suboptimal CD4 T-cell count and aggravators of depressive symptomatology, via 2-level logit and multivariable OLS regression modeling, respectively.
+
+```{r Pull NOAH, ACS,}
+
+noah <- read_sas("C:/Users/Ethan/Box/nola-gem/Data/Baseline Data/noah_baseline365_scored.sas7bdat")
+
+#Concatenate into single address variable 
+noah$full_address <- paste(noah$street_address, noah$city, noah$state, noah$zipcode, sep = ", ")
+
+noah_tst <- noah %>% 
+  geocode(address = full_address, method = 'arcgis')
+
+#patdowns
+
+df_2018 <- read.csv("C:/Users/Ethan/Desktop/SBM_abstract/Raw Data/df_18.csv")
+
+df_2018 <- df_2018 %>%
+  mutate(patdown = ifelse(grepl("Search Occurred: Yes;Search Types: Pat-down;|Pat down: Yes", ActionsTaken), 1, 0),
+         drugs = ifelse(grepl("Drugs", ActionsTaken), 1, 0),
+         surplus = ifelse(grepl("No action taken", ActionsTaken), 1, 0),
+         citation = ifelse(grepl("Citation Issued", ActionsTaken), 1, 0),
+         arrest = ifelse(grepl("Physical Arrest", ActionsTaken), 1, 0),
+    patdown_wht = ifelse(grepl("Search Occurred: Yes;Search Types: Pat-down;|Pat down: Yes", ActionsTaken) & SubjectRace == "WHITE", 1, 0),
+    drugs_wht = ifelse(grepl("Drugs", ActionsTaken) & SubjectRace == "WHITE", 1, 0),
+    surplus_wht = ifelse(grepl("No action taken", ActionsTaken) & SubjectRace == "WHITE", 1, 0),
+    citation_wht = ifelse(grepl("Citation Issued", ActionsTaken) & SubjectRace == "WHITE", 1, 0),
+    arrest_wht = ifelse(grepl("Physical Arrest", ActionsTaken) & SubjectRace == "WHITE", 1, 0),
+    patdown_blk = ifelse(grepl("Search Occurred: Yes;Search Types: Pat-down;|Pat down: Yes", ActionsTaken) & SubjectRace == "BLACK", 1, 0),
+    drugs_blk = ifelse(grepl("Drugs", ActionsTaken) & SubjectRace == "BLACK", 1, 0),
+    surplus_blk = ifelse(grepl("No action taken", ActionsTaken) & SubjectRace == "BLACK", 1, 0),
+    citation_blk = ifelse(grepl("Citation Issued", ActionsTaken) & SubjectRace == "BLACK", 1, 0),
+    arrest_blk = ifelse(grepl("Physical Arrest", ActionsTaken) & SubjectRace == "BLACK", 1, 0)
+  )
+
+
+```
+
+# Measures 
+Our level-2 exposure of interest, the Index of Concentration at the Extremes (ICE), was calculated at the CT level using 2010–2015 ACS pooled 5-year estimates. Guided by Krieger [53], the sum of non-Hispanic (NH) White families whose annual household income was ≥80th percentile (≥$100,000) minus the sum of NH Black families whose household income <20th percentile (<$25,000), was divided by the total population in the CT with known income [53]. The ICE is a versatile and well-established measure of racially polarized SES, robust against the small-sample biases that can distort the Gini coefficient at lower levels of geography [54].
+
+
+```{r gentrification prep}
+
+####################  Census ###################################################
+
+## 2.1 2006-2010 ACS ----
+census_2010 <- get_acs(
+  variables = c(
+    med_rent = "B25064_001",      # median rent
+    med_home_val = "B25077_001",  # median home value, owner-occupied
+    med_hhinc = "B19013_001",     # median household income (2010 inflation-adjusted)
+    pop = "B01001_001",           # total population
+    pop25 = "B15002_001",         # population over 25
+    edu1a = "B15002_015",         # male, has bachelor's degree
+    edu2a = "B15002_016",         # male, has master's degree
+    edu3a = "B15002_017",         # male, has professional degree
+    edu4a = "B15002_018",         # male, has doctorate
+    edu1b = "B15002_032",         # female, has bachelor's degree
+    edu2b = "B15002_033",         # female, has master's degree
+    edu3b = "B15002_034",         # female, has professional degree
+    edu4b = "B15002_035",         # female, has doctorate
+    white = "B03002_003",         # race/eth, non-hispanic white
+    black = "B03002_004",         # race/eth, non-hispanic black
+    latinx = "B03002_012"         # race/eth, latinx
+  ),
+  geography = "tract", 
+  state = "LA", 
+  county = "Orleans", 
+  survey = "acs5",
+  year = 2010
+) 
+## ! note: tract-level variables are only in five-year estimate files
+## https://www.census.gov/content/dam/Census/library/publications/2020/acs/acs_geography_handbook_2020_ch01.pdf
+
+# format to wide 
+census10 <- pivot_wider(
+  data = census_2010, 
+  id_cols = c(GEOID, NAME), 
+  names_from = variable, 
+  values_from = estimate
+) %>%
+  # create tract-level % with at least a bachelor's degree
+  mutate(
+    # % black
+    pct_black = black / pop,
+    # % latinx
+    pct_latinx = latinx / pop,
+    # % white
+    pct_white = white / pop,
+    # total with a bachelor's
+    tot_edu = dplyr::select(.,edu1a:edu4b) %>% rowSums(),
+    # proportion with a bachelor's
+    pct_edu = ifelse(tot_edu == 0, 0, tot_edu / pop25),
+    # low income indicator, at or below median
+    low_inc10 = ifelse(med_hhinc > median(med_hhinc, na.rm = TRUE), 0, 1)
+  ) %>% 
+  # rename variables for merging
+  rename(
+    med_hhinc10 = med_hhinc,
+    med_rent10 = med_rent,
+    med_home_val10 = med_home_val,
+    pct_edu10 = pct_edu
+  )
+
+
+
+# https://api.census.gov/data/2018/acs/acs5/variables.html
+census_2018 <- get_acs(
+  variables = c(
+    med_rent = "B25064_001",      # median rent
+    med_home_val = "B25077_001",  # median home value, owner-occupied
+    households_white = "B19001A_001",
+    households_blk = "B19001B_001",
+    households = "B19001_001",
+    med_hhinc = "B19013_001",     # median household income (2019 inflation-adjusted)
+    pop = "B01001_001",           # total population
+    pop25 = "B15002_001",         # population over 25
+    edu1a = "B15002_015",         # male, has bachelor's degree
+    edu2a = "B15002_016",         # male, has master's degree
+    edu3a = "B15002_017",         # male, has professional degree
+    edu4a = "B15002_018",         # male, has doctorate
+    edu1b = "B15002_032",         # female, has bachelor's degree
+    edu2b = "B15002_033",         # female, has master's degree
+    edu3b = "B15002_034",         # female, has professional degree
+    edu4b = "B15002_035",         # female, has doctorate
+    white = "B03002_003",         # race/eth, non-hispanic white
+    black = "B03002_004",         # race/eth, non-hispanic black
+    latinx = "B03002_012",         # race/eth, latinx
+    whiteinc14 = "B19001H_014",   # White HH: $100K to $124K
+    whiteinc15 = "B19001H_015",   # White, higher incomes
+    whiteinc16 = "B19001H_016",   # White, higher incomes
+    whiteinc17 = "B19001H_017",   # B19001H_015E-17E White, higher incomes
+    blackinc5 = "B19001B_005",    #  Black HH:  $20k-25k
+    blackinc2 = "B19001B_002",    # Black lower incomes
+    blackinc3 = "B19001B_003",    # Black lower incomes
+    blackinc4 = "B19001B_004"     # B19001B_002E-4E Black lower incomes
+  ),
+  geography = "tract", 
+  state = "LA", 
+  county = "Orleans", 
+  survey = "acs5",
+  year = 2018
+  #,geometry = TRUE
+)
+
+## format to wide 
+census18 <- pivot_wider(
+  data = census_2018, 
+  id_cols = c(GEOID, NAME), 
+  names_from = variable, 
+  values_from = estimate
+) %>%
+  # create tract-level % with at least a bachelor's degree
+  mutate(
+    # % black
+    pct_black = black / pop,
+    # % latinx
+    pct_latinx = latinx / pop,
+    # % white
+    pct_white = white / pop,
+    # total with a bachelor's
+    tot_edu = dplyr::select(.,edu1a:edu4b) %>% rowSums(),
+    # proportion with a bachelor's
+    pct_edu = ifelse(tot_edu == 0, 0, tot_edu / pop25),
+    # ICE Race & Income
+    ice_race_inc = ((whiteinc14+whiteinc15+whiteinc16+whiteinc17)-(blackinc5+blackinc2+blackinc3+blackinc4))/
+      households,
+    # ICE Race
+    ice_race = (white-black)/pop
+  )
+
+## merge 2010 with 2018 ACS ----
+gen_data18 <- census18 %>%
+  # add relevant 2010 tract-level variables
+  left_join(
+    census10[, c(
+      "GEOID","low_inc10","med_hhinc10","med_rent10",
+      "med_home_val10","pct_edu10"
+    )], 
+    by = "GEOID"
+  ) %>%
+  mutate(
+    # tract-level percent change from 2010 to 2018
+    diff_rent = (med_rent - med_rent10) / med_rent10,
+    diff_home_val = (med_home_val - med_home_val10) / med_home_val10,
+    ## ! note: using absolute change in % with bachelor's due to 0 values in 2010
+    diff_pct_edu = pct_edu - pct_edu10,
+    # city-wide median percent differences from 2010 to 2018
+    c_diff_rent = (
+      median(med_rent, na.rm = TRUE) - median(med_rent10, na.rm = TRUE)
+    ) / median(med_rent10, na.rm = TRUE),
+    c_diff_home_val = (
+      median(med_home_val, na.rm = TRUE) - median(med_home_val10, na.rm = TRUE)
+    ) / median(med_home_val10, na.rm = TRUE),
+    ## ! note: using absolute change in % with bachelor's due to 0 values in 2010
+    c_diff_pct_edu = median(pct_edu, na.rm = TRUE) - median(pct_edu10, na.rm = TRUE),
+    # gentrification indicator
+    gen_cat18 = ifelse(
+      # 0 = non-gentrifiable
+      low_inc10 == 0, 0, ifelse(
+        # 2 = gentrifying
+        low_inc10 == 1 & 
+          ((diff_rent > c_diff_rent) | (diff_home_val > c_diff_home_val)) &
+          (diff_pct_edu > c_diff_pct_edu),
+        # otherwise, 1 = gentrifiable
+        2, 1
+      )
+    ) %>% as.factor()
+  )
+
+
+
+
+```
+
+```{r patdown and VC calculation}
+
+#Get blank shapefile for Census
+census_2018 <- get_acs(
+  variables = c( pop = "B01001_001"),
+  geography = "tract", 
+  state = "LA", 
+  county = "Orleans", 
+  survey = "acs5",
+  year = 2018,
+  geometry = TRUE
+) 
+
+
+############################Patdowns ###########################################
+
+
+# Convert to spatial data
+df_sf <- st_as_sf(df_2018, coords = c("Longitude", "Latitude"), crs = 4326)
+
+census_2018 <- st_transform(census_2018, 3452)
+df_sf <- st_transform(df_sf, st_crs(census_2018))
+
+# Spatial join
+joined_data <- st_join(df_sf, census_2018)
+
+counts <- joined_data %>%
+  group_by(GEOID) %>%
+  dplyr::summarize(
+    drugs_count = sum(drugs, na.rm = TRUE),
+    arrest_count = sum(arrest, na.rm = TRUE),
+    surplus_count = sum(surplus, na.rm = TRUE),
+    citation_count = sum(citation, na.rm = TRUE),
+    patdown_count = sum(patdown, na.rm = TRUE),
+    drugs_wht_count = sum(drugs_wht, na.rm = TRUE),
+    drugs_blk_count = sum(drugs_blk, na.rm = TRUE),
+    arrest_wht_count = sum(arrest_wht, na.rm = TRUE),
+    arrest_blk_count = sum(arrest_blk, na.rm = TRUE),
+    surplus_wht_count = sum(surplus_wht, na.rm = TRUE),
+    surplus_blk_count = sum(surplus_blk, na.rm = TRUE),
+    citation_wht_count = sum(citation_wht, na.rm = TRUE),
+    citation_blk_count = sum(citation_blk, na.rm = TRUE),
+    patdown_wht_count = sum(patdown_wht, na.rm = TRUE),
+    patdown_blk_count = sum(patdown_blk, na.rm = TRUE)
+  )
+
+# Merge counts with census data
+final_data <- left_join(gen_data18, counts, by = "GEOID")
+
+
+################################ Violent Crime #################################
+
+calls2018_conf <- read.csv("C:/Users/Ethan/Desktop/SBM_abstract/911_2018_conf.csv")
+
+#Confirmed
+calls2018_conf <- calls2018_conf[!is.na(calls2018_conf$Longitude) & !is.na(calls2018_conf$Latitude), ]
+calls_conf_sf <- st_as_sf(calls2018_conf, coords = c("Longitude", "Latitude"), crs = 4326)
+
+calls_conf_sf <- st_transform(calls_conf_sf, st_crs(census_2018))
+joined_data_911_conf <- st_join(calls_conf_sf, census_2018)
+
+counts_911_conf <- joined_data_911_conf %>%
+  group_by(GEOID) %>%
+  dplyr::summarize(
+    dv_conf_count = sum(DV, na.rm = TRUE),
+    Homicide_conf_count = sum(Homicide, na.rm = TRUE),
+    Robbery_conf_count = sum(Robbery, na.rm = TRUE),
+    Weapon_conf_count = sum(Weapon, na.rm = TRUE),
+    Assault_conf_count = sum(Assault, na.rm = TRUE),
+    ViolentCrime_conf_count = sum(ViolentCrime, na.rm = TRUE),
+    ShotsFired_conf_count = sum(ShotsFired, na.rm = TRUE),
+    drugs_911_conf_count = sum(drugs_911, na.rm = TRUE),
+  )
+
+#sum(counts_911_all$ShotsFired_count)
+#sum(counts_911_conf$ShotsFired_conf_count)
+
+
+final_data <- left_join(final_data, counts_911_conf, by = "GEOID")
+
+
+```
+
+# Participants and Procedures
+NOAH, a translational prospective cohort study, aimed to advance knowledge on environmental and biopsychosocial mediators of the effects of alcohol use on HIV-related comorbidity, disease progression, and processes of aging, among virally suppressed PLWH [51]. Participants (N = 365) aged ≥18 years were enrolled via outpatient HIV clinics across the Greater New Orleans, Louisiana metropolitan area from October 2015 to October 2017. Clinic patients who demonstrated potentially hazardous patterns of alcohol use, scoring ≥8 on the Alcohol Use Disorders Identification Test (AUDIT), were oversampled at a 1:1 ratio. Patients with a past-6-week acute illnesses, nonprophylaxis antibiotic prescription, or pregnancy, were excluded. Comprehensive biopsychosocial assessments were undertaken at BL appointments administered at the Louisiana State University Health Sciences Center Clinical and Translational Research Center. Biospecimen collection was conducted under overnight fasting conditions. Survey measures were administered by trained research staff and recorded in REDCap. EHR data were abstracted and migrated to REDCap as an adjacent study form. A detailed protocol of NOAH BL data collection procedures is provided in Appendix S1 of Welsh et al. [51]. 
+	As our scope of inquiry was focused on metropolitan New Orleans, the broader NOAH sample was restricted to n = 335 participants who resided in Orleans and surrounding parishes.
+
+
+
+
+```{r cleaning NOAH Data}
+
+
+noah_filt <- noah_tst %>%
+  filter(str_detect(city, regex("new[ _]*orleans", ignore_case = TRUE)) |  city == "Algiers")
+
+
+# Plot each address, pull out only coordinates and study ID  
+noah_geo <- noah_filt %>% dplyr::select(lat, long, carc_study_id) 
+
+# Map coordinates 
+noah_geo <- noah_geo %>%
+  filter(!is.na(long) & !is.na(lat))
+
+noah_geo <- st_as_sf(noah_geo, coords = c("long", "lat"), crs = 4326)
+noah_geo <- st_transform(noah_geo, 3452)
+crs(noah_geo)
+# Create buffers around each address
+
+noah_geo_0_10_mile <- st_buffer(noah_geo, dist = 0.10 * 5280)  # 0.10 miles
+noah_geo_0_25_mile <- st_buffer(noah_geo, dist = 0.25 * 5280)  # 0.25 miles
+noah_geo_0_50_mile <- st_buffer(noah_geo, dist = 0.50 * 5280)  # 0.50 miles
+
+# Spatial join our buffers to each exposure
+
+process_noah_geo <- function(calls_data, buffer_data) {
+  # Get unique carc_study_ids
+  buffer_ids <- buffer_data %>%
+    st_drop_geometry() %>%
+    distinct(carc_study_id)
+  
+  # Perform spatial join
+  joined_data <- st_join(calls_data, buffer_data, join = st_intersects)
+  
+  # Aggregate incident count
+  aggregated_data <- joined_data %>%
+    group_by(carc_study_id) %>%
+    summarise(incident_count = n(), .groups = 'drop') %>%
+    st_drop_geometry()
+  
+  # fill in 0 for no intersections
+  final_data <- buffer_ids %>%
+    left_join(aggregated_data, by = "carc_study_id") %>%
+    mutate(incident_count = ifelse(is.na(incident_count), 0, incident_count))
+  
+  return(final_data)
+}
+
+calls_conf_sf <- calls_conf_sf %>% filter(ViolentCrime == 1)
+
+noah_geo_0_10_agg <- process_noah_geo(calls_conf_sf, noah_geo_0_10_mile)
+noah_geo_0_25_agg <- process_noah_geo(calls_conf_sf, noah_geo_0_25_mile)
+noah_geo_0_50_agg <- process_noah_geo(calls_conf_sf, noah_geo_0_50_mile)
+
+# Join these back to our NOAH Dataset (it wouldn't let me pipe the rename off the left join)
+
+noah_filt <- left_join(noah_filt, noah_geo_0_10_agg, by = "carc_study_id") 
+noah_filt <- noah_filt %>% rename(vc_call_010m = incident_count)
+
+noah_filt <- left_join(noah_filt, noah_geo_0_25_agg, by = "carc_study_id")
+noah_filt <- noah_filt %>% rename(vc_call_025m = incident_count)
+
+noah_filt <- left_join(noah_filt, noah_geo_0_50_agg, by = "carc_study_id")
+noah_filt <- noah_filt %>% rename(vc_call_050m = incident_count)
+
+# Filter data for patdowns
+patdown <- df_sf %>% filter(patdown == 1)
+
+# Spatial join and aggregate for patdowns
+noah_geo_0_10_agg_pat <- process_noah_geo(patdown, noah_geo_0_10_mile)
+noah_geo_0_25_agg_pat <- process_noah_geo(patdown, noah_geo_0_25_mile)
+noah_geo_0_50_agg_pat <- process_noah_geo(patdown, noah_geo_0_50_mile)
+
+# Join these back to the NOAH dataset
+noah_filt <- left_join(noah_filt, noah_geo_0_10_agg_pat, by = "carc_study_id") 
+noah_filt <- noah_filt %>% rename(pd_call_010m = incident_count)
+
+noah_filt <- left_join(noah_filt, noah_geo_0_25_agg_pat, by = "carc_study_id")
+noah_filt <- noah_filt %>% rename(pd_call_025m = incident_count)
+
+noah_filt <- left_join(noah_filt, noah_geo_0_50_agg_pat, by = "carc_study_id")
+noah_filt <- noah_filt %>% rename(pd_call_050m = incident_count)
+
+# Now NOAH Data have buffer exposures, we will now join to census tract 
+
+noah_geoid <- st_join(noah_geo, census_2018, join = st_intersects)
+noah_geoid <- noah_geoid %>% dplyr::select(carc_study_id, GEOID) %>% st_drop_geometry()
+
+
+noah_filt <- left_join(noah_filt, noah_geoid, by = "carc_study_id")
+noah_filt <- left_join(noah_filt, final_data, by = "GEOID")
+
+
+
+```
+
+	Our level-1 exposures of interest relied on the 21-item Urban Life Stressor Scale (ULSS), which taps the acuity of a range of urban environmental stressors, e.g. parenting, housing circumstances, the availability of transportation and public services, inter-racial discord, and relations with law enforcement. The ULSS is scored on a 5-point scale, anchored at 1 = “No stress at all” and 5 = “Extremely stressful – more than I can handle” [55].
+
+Individual Items:
+  "ul21", = police
+  "ul13", = Crime and violence
+  "USER_ulss7",  = Your neighborhood environment
+  "USER_ulss1",  = Money or finances
+  
+```{r ULSS}
+
+# Calculate sum and average for `ulss21`
+noah_filt <- noah_filt %>%
+  mutate(
+    ulss_sum = rowSums(dplyr::select(., starts_with("ulss")), na.rm = TRUE),
+    ulss_avg = rowMeans(dplyr::select(., starts_with("ulss")), na.rm = TRUE)
+  )
+
+
+```
+
+
+NOAH participants’ A.) CD4 T-cells/mm3 were ascertained via overnight fasting blood draw at BL, and dichotomized at 500/mm3, generally considered the lower threshold of the normal human range [56]; B.) depression symptomatology was tapped using summed scores of the Hospital Anxiety and Depression Scale 7-item depression subscale (HADS-D). The HADS-D is historically well-validated across contexts, and has demonstrated acceptable sensitivity and specificity for major depression screening in clinical settings. It is scored on a 4-point ordinal scale, with item-specific variations in anchoring [57-58].
+
+```{r CD4 and HADS}
+
+
+table(noah_filt$cd4cat)
+summary(noah_filt$cd4_count)
+
+table(noah_filt$hads_anxietycat)
+table(noah_filt$hads_depresscat)
+
+
+```
+	
+	
+	The (A) control set included race (interpreted as lifecourse racism exposure [49]), recorded in U.S. Census categories; assigned sex; indicators for ART adherence and day-level polysubstance use; and total AUDIT scores, which range from 1–40, with ≥8 suggesting hazardous consumption and ≥15 likely alcohol dependence [58]. The (B) control set included race; assigned sex; reliance on congregate housing, such as homeless shelters; lifetime depression diagnostic markers abstracted from EHR; lifetime economic hardship, scored 1–6 using measures adapted from the U.S. Census Bureau’s Survey of Income and Program Participation; and summed HIV Stigma Scale scores [51].
+
+```{r Controls}
+
+# A Control Set 
+table(noah_filt$race)
+table(noah_filt$gender)
+table(noah_filt$polyusesum)
+table(noah_filt$dailypolyuse)
+table(noah_filt$auditCAT)
+
+# B Control Set 
+table(noah_filt$race)
+table(noah_filt$gender)
+table(noah_filt$homeless)
+table(noah_filt$housing)
+summary(noah_filt$lehtotal_sum) # lifetime econ hardship
+
+noah_filt <- noah_filt %>%
+  rowwise() %>%
+  mutate(stigma_sum = sum(c_across(stigma1:stigma40), na.rm = TRUE)) %>%
+  ungroup()
+
+# Check the distribution of the summed stigma scores
+summary(noah_filt$stigma_sum)
+
+```
+
+Exploratory factor analysis detected latent subconstructs of urban life stress
+I used this documentation as a guide: https://rpubs.com/pjmurphy/758265 
+
+```{r scree-plot, echo=TRUE, fig.width=8, fig.height=6}
+
+
+# Extract ULSS items with participant ID for tracking
+ulss <- noah_filt %>%
+  dplyr::select(carc_study_id, ulss1:ulss21)
+
+# Evaluate / Clean Data 
+summary(ulss)  # Review missing or non-finite values
+
+ulss_clean <- ulss %>%
+  mutate(across(-carc_study_id, ~ ifelse(is.finite(.), ., NA))) %>%
+  drop_na()
+
+# Save IDs before dropping for analysis
+ulss_ids <- ulss_clean$carc_study_id
+ulss_clean <- ulss_clean %>% select(-carc_study_id)
+
+#Kaiser-Meyer-Olkin (KMO) Test for Sampling Adequacy
+KMO(ulss_clean)
+#Kaiser-Meyer-Olkin factor adequacy
+#Call: KMO(r = ulss_clean)
+#Overall MSA =  0.91
+
+# Evaluate the correlation Matrix 
+
+cor_matrix <- cor(ulss_clean, use = "pairwise.complete.obs")  # Correlation matrix
+view(cor_matrix)
+#Don't see any correlations high enough for concern
+
+eigenvalues <- eigen(cor_matrix)$values  # Eigenvalues from the correlation matrix
+
+#Generate a Scree Plot
+plot(eigenvalues, 
+     type = "b", 
+     main = "Scree Plot", 
+     xlab = "Number of Factors", 
+     ylab = "Eigenvalue", 
+     xaxt = "n")  # Suppress default x-axis
+
+#Plot seems to suggest 2? 
+
+# determine the optimal number of factors
+fa.parallel(ulss_clean, fa = "fa", n.iter = 100)
+
+#>Parallel analysis suggests that the number of factors =  2  and the number of components =  NA
+
+#Removing the low loading var we discovered after the first run:
+ulss_clean <- ulss_clean %>% select(-ulss2, -ulss3, -ulss10, -ulss17)
+
+#Run Factor Analysis w/ 2 factors
+fit <- fa(ulss_clean, nfactors = 2, rotate = "promax", fm = "ml")  # Maximum likelihood factor analysis
+
+print(fit, digits = 2, cutoff = 0.3, sort = TRUE)
+
+#Visualize the factor loadings using fa.diagram()
+fa.diagram(fit)
+# <0.4 variables are:
+# ulss2: Job satisf. | ulss3: Raising children | ulss10: marriage/relat. | ulss17: Drugs alc 
+
+#Extract and merge factor scores into the original dataset
+factor_scores <- as.data.frame(fit$scores)  # Extract factor scores
+
+# Add the row identifiers for the merge w/ full dataset
+ulss_clean <- ulss_clean %>%
+  mutate(row_id = row_number())
+
+noah_filt <- noah_filt %>%
+  mutate(row_id = row_number())
+
+factor_scores <- factor_scores %>%
+  mutate(row_id = ulss_clean$row_id)  
+
+noah_with_scores <- noah_filt %>%
+  left_join(factor_scores, by = "row_id")  # Merge factor scores into the original dataset
+
+#Check the final dataset with factor scores
+head(noah_with_scores)
+
+# 2 Stressor Factors that embody two different impacts/exposures of structural racism:
+#ML 1 seems to be violence: relations with police, relations with racial groups not your own, gang activity  
+#ML 2 seems to be more physical environment items: Public services, transportation, housing, alcohol, health(?)
+
+#noah_fi <- noah_with_scores %>% select(-geometry.x, -geometry.y)
+#write.csv(noah_fi, 'C:/Users/Ethan/Box/Gentrification PD CD4 Skeen Smith/gent_pat_cd4_61626.csv')
+#file corrected for NA obs in obs 67 
+
+```
