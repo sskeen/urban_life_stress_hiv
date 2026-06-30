@@ -1,5 +1,14 @@
 ## 🌒 Law enforcement–related stress and gentrification as determinants of psychiatric morbidity and CD4 decline among Black people with HIV in New Orleans: isolating pathways of embodiment
+**[Simone J. Skeen](https://simoneskeen.xyz/); Ethan A. Smith; et al.**<br>
 
+<p align="center">
+  <img src="tk" alt="tk." width="800" height=auto>
+  <br>
+  <em>Tk.</em>
+</p>
+
+
+#### Narrative summary
 This ongoing substudy integrates exploratory factor analyses and multilevel mixed-effects models grounded in _Embodiment_, a key tenet of Krieger’s ecosocial theory,[^1] originally presented in the "Embodying Oppression: Urban Stress as Structural Pathogenesis among People Living with HIV in the Gulf South" symposium at the [2024 Society of Behavioral Medicine 45<sup>th</sup> Annual Meeting & Scientific Sessions](https://www.sbm.org/meetings/2024).[^2]
 
 [^1]: Krieger N. Methods for the scientific study of discrimination and health: an ecosocial approach. _Am J Public Health_. 2012;102(5):936-944. doi:10.2105/AJPH.2011.300544
