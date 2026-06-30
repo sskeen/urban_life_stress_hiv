@@ -1,0 +1,16 @@
+# Data
+data/
+
+# Env (private paths)
+.env
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Temp stuff
+temp/
+
