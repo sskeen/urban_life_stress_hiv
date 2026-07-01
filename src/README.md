@@ -8,4 +8,4 @@ Source code for Urban life stress and HIV among Black PWH in New Orleans.
 | `gent_patdown_analysis061626.R` | Tk |
 | `Gentrification Patdown CD4 Smith Skeen061626.Rmd` | Tk |
 | `poe_map.R` | Tk |
-| `urban_life_stress_hiv.do` | Tk |
+| `efa_modela_modelb_margins.do` | Tk |
